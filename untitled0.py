@@ -18,6 +18,8 @@ import numpy as np
 import scipy.interpolate
 from sisopy31 import*
 
+np.set_printoptions(precision=4,suppress=True)
+
 #%% AIRCRAFT CHARACTERISTIC
 
 l_ref = 5.24        #Reference length
@@ -33,7 +35,7 @@ h = 2700            #Altitude (ft)
 
 T = 282.801         #Temperature in Kelvin
 P = 91821.4         #Pressure Pa
-rho = 1.13110         #Density (kg/m^3)
+rho = 1.13110       #Density (kg/m^3)
 c_sound = 337.121   #Speed of sound (m/s)
 
 
@@ -49,13 +51,35 @@ f_delta = 0.9       #Aerodynamic center of fins
 k = 0.34            #Polar coeficient
 C_mq = -0.42        #Damping coeficient 
 
+#%% mdamp function
+
+def mdamp(A):
+    roots=np.linalg.eigvals(A)
+    ri=[]
+    a=[]
+    b=[]
+    w=[]
+    xi=[]
+    st=[]
+    for i in range(0,roots.size):
+        ri.append(roots[i])
+        a.append(roots[i].real)
+        b.append(roots[i].imag)
+        w.append(math.sqrt(a[i]**2+b[i]**2))
+        xi.append(-a[i]/w[i])
+        if b[i]>0:
+            signb='+'
+        else:
+            signb='-'
+        st.append('%.5f'%(a[i])+signb+'j'+'%.5f'%(math.fabs(b[i]))+'xi='+'%.5f'%(xi[i])+'w='+'%.5f'%(w[i])+'rad/s')
+    print("\n",st)
 #%% STUDY OF THE UNCONTROLLED AIRCRAFT
 
 #Determine the equilibrium points conditions around the chosen operating point
 
-X_f = f*l_t
-X_fdeltam = f_delta*l_t
-X_G = c*l_t
+X_f = -f*l_t
+X_fdeltam = -f_delta*l_t
+X_G = -c*l_t
 
 X = X_f - X_G
 Y = X_fdeltam - X_G
@@ -70,9 +94,9 @@ eps = 10**-10
     
 i=0
 
-prout = True
+cond = True
 
-while prout :
+while cond :
     C_z_eq = (1/(Q*S))*(m*g-F_p_eq[i]*np.sin(alpha_eq_list[i]))
     C_x_eq = C_x0 + k*(C_z_eq**2)
     C_x_deltam = 2*k*C_z_eq*C_z_deltam
@@ -87,12 +111,12 @@ while prout :
     F_p_eq.append(F_equilibre)
     
     if (abs(a_l_p_h_a-alpha_eq_list[i])<eps):
-        prout = False
+        cond = False
         
     i+=1
 
-print("Nombre d'itération : ",i)
-print("alpha_equilibre = ",alpha_eq_list[len(alpha_eq_list)-1])
+print("\nNombre d'itération : ",i)
+print("\nalpha_equilibre = ",alpha_eq_list[len(alpha_eq_list)-1])
 alpha_eq=alpha_eq_list[len(alpha_eq_list)-1]
 
 #Build a small signals model (Matrix construction)
@@ -125,19 +149,27 @@ Z_tho = (F_tho*np.sin(alpha_eq))/(m*V_eq)
 
 A=np.matrix([[-X_v,-X_gamma,-X_alpha,0,0,0],
              [Z_v,0,Z_alpha,0,0,0],
-             [-Z_v,0,Z_alpha,0,0,0],
+             [-Z_v,0,-Z_alpha,1,0,0],
              [0,0,m_alpha,m_q,0,0],
              [0,0,0,1,0,0],
              [0,V_eq,0,0,0,0]])
-B=np.matrix([[0,-X_tho],
+Btau=np.matrix([[0,-X_tho],
              [Z_delta_m,Z_tho],
              [-Z_delta_m,-Z_tho],
              [m_delta_m,m_tho],
              [0,0],
              [0,0]])
+B=Btau[:,0:1]
 
-#print("A = ",A)
-#print("B = ",B)
+C=np.eye(6)
+D=np.zeros((6,1))
+
+
+sys=control.ss(A,B,C,D)
+control.damp(sys)
+
+# print("A = ",A)
+# print("B = ",B)
 
 # submatrix ( matr i x s l i c i n g )
 # note t h a t ind i ce s begin at 0 and
@@ -165,3 +197,146 @@ show()
 Kq=-0.115
 Tqbo=feedback(Kq*sys_q,1)
 sisotool(sys_q)
+
+#%% Mode study
+
+Ar=A[0:4,0:4]
+Br=B[0:4,0:1]
+
+# print("\nAr = ",Ar)
+# print("\nBr = ",Br)
+
+# Cr=np.matrix([0.0,1.0])
+# Dr=0.0
+
+mdamp(Ar)
+
+# print("\n",matrix_rank(control.ctrb(Ar,Br)))
+
+eigenValues, eigenVectors=np.linalg.eig(A)
+# print("\nEigenvalues of A :")
+# print(eigenValues)
+# print("\nEigenvectors of A :")
+# print(eigenVectors)
+
+#%% Short period Mode
+Ai=Ar[2:4, 2:4]
+Bi=Br[2:4, 0]
+
+mdamp(Ai)
+
+Cia=np.matrix([[1, 0]])
+Ciq=np.matrix([[0, 1]])
+Di=np.matrix([[0]])
+
+TaDm_ss=control.ss(Ai, Bi, Cia, Di)
+print("\nTransfer function alpha/delta m : ")
+TaDm_tf= control.tf(TaDm_ss)
+print(TaDm_tf)
+print("\nStatic gain of alpha/delta m =%f "%(control.dcgain(TaDm_tf)))
+TqDm_ss= control.ss(Ai, Bi, Ciq, Di)
+print("\nTransfer function q/delta_m : " )
+TqDm_tf= control.ss2tf(TqDm_ss)
+print(TqDm_tf)
+print("\nStatic gain of q/delta m =%f "%(dcgain(TqDm_tf)))
+
+figure(2)
+Ya,Ta = control.matlab.step(TaDm_tf,arange(0,10,0.01))
+Yq,Tq = control.matlab.step(TqDm_tf,arange(0,10,0.01))
+
+plot(Ta,Ya,'b',Tq,Yq,'r',lw=2)
+plot([0,Ta[-1]],[Ya[-1],Ya[-1]],'k--',lw=1)
+plot([0,Ta[-1]],[0.95*Ya[-1],0.95*Ya[-1]],'k--',lw=1)
+plot([0,Tq[-1]],[Yq[-1],Yq[-1]],'k--',lw=1)
+plot([0,Tq[-1]],[1.05*Yq[-1],1.05*Yq[-1]],'k--',lw=1)
+plot([0,Tq[-1]],[0.95*Yq[-1],0.95*Yq[-1]],'k--',lw=1)
+
+minorticks_on()
+grid(b=True, which='both')
+#grid(True)
+title(r'Step response $\alpha/\delta_m$ et $q/\delta_m$')
+legend((r'$\alpha/\delta_m$',r'$q/\delta_m$'))
+
+xlabel('Time(s)')
+ylabel(r'$\alpha$ (rad) & $q$ (rad/s)')
+
+Osa, Tra, Tsa = step_info(Ta,Ya)
+Osq, Trq, Tsq = step_info(Tq,Yq)
+yya = interp1d(Ta, Ya)
+plot(Tsa,yya(Tsa),'bs')
+text(Tsa,yya(Tsa)-0.2,Tsa)
+yyq=interp1d(Tq, Yq)
+plot(Tsq,yyq(Tsq),'rs')
+text(Tsq,yyq(Tsq)-0.2,Tsq)
+print('\nAlpha settling time 5%% =%f s'%Tsa)
+print('q Settling time 5%% = %f s'%Tsq)
+
+#%% Phugoid M
+
+Ap = Ar[0:2,0:2]
+Bp = Br[0:2,0:1]
+
+mdamp(Ap)
+
+Cpv=np.matrix([[1,0]])
+Cpg=np.matrix([[0,1]])
+Dp=np.matrix([[0]])
+
+TvDm_ss=control.ss(Ap,Bp,Cpv,Dp)
+print("\nTransfer function V/delta_m :")
+TvDm_tf=control.tf(TvDm_ss)
+print(TvDm_tf)
+
+print("\nStatic gain of alpha/delta_m =%f"%(control.dcgain(TvDm_tf)))
+
+TgDm_ss=control.ss(Ap,Bp,Cpg,Dp)
+print("\nTransfer function gamma/delta_m :")
+TgDm_tf=control.tf(TgDm_ss)
+print(TgDm_tf)
+
+print("\nStatic gain of gamma/delta_m =%f"%(control.dcgain(TgDm_tf)))
+
+figure(3)
+Yv,Tv=control.matlab.step(TvDm_tf,arange(0,700,0.1))
+Yg,Tg=control.matlab.step(TgDm_tf,arange(0,700,0.1))
+
+plot(Tv,Yv,'b',Tg,Yg,'r',lw=2)
+plot([0,Tv[-1]],[Yv[-1],Yv[-1]],'k--',lw=1)
+plot([0,Tv[-1]],[1.05*Yv[-1],1.05*Yv[-1]],'k--',lw=1)
+plot([0,Tv[-1]],[0.95*Yv[-1],0.95*Yv[-1]],'k--',lw=1)
+plot([0,Tg[-1]],[Yv[-1],Yg[-1]],'k--',lw=1)
+plot([0,Tg[-1]],[1.05*Yg[-1],1.05*Yg[-1]],'k--',lw=1)
+plot([0,Tg[-1]],[0.95*Yg[-1],0.95*Yg[-1]],'k--',lw=1)
+
+minorticks_on()
+grid(b=True, which='both')
+#grid(True)
+title(r'Step response $V/\delta_m$ et $\gamma/\delta_m$')
+legend((r'$V/\delta_m$',r'$\gamma/\delta_m$'))
+
+xlabel('Time(s)')
+ylabel(r'$V$ (rad) & $\gamma$ (rad/s)')
+
+Osv, Trv, Tsv = step_info(Tv,Yv)
+Osg, Trg, Tsg = step_info(Tg,Yg)
+yyv = interp1d(Tv, Yv)
+plot(Tsv,yyv(Tsv),'bs')
+text(Tsv,yyv(Tsv)-0.2,Tsv)
+yyg=interp1d(Tg, Yg)
+plot(Tsg,yyg(Tsg),'rs')
+text(Tsg,yyg(Tsg)-0.2,Tsg)
+print('\nAlpha settling time 5%% =%f s'%Tsv)
+print('q Settling time 5%% = %f s'%Tsg)
+
+
+
+
+
+
+
+
+
+
+
+
+
